@@ -24,6 +24,10 @@ public final class DaggerReflect {
     return ComponentBuilderInvocationHandler.forComponentBuilder(builderClass);
   }
 
+  public static <B, C> B builder(Class<B> builderClass, Class<C> componentClass) {
+    return ComponentBuilderInvocationHandler.forComponentBuilder(builderClass, componentClass);
+  }
+
   public static <F> F factory(Class<F> factoryClass) {
     return ComponentFactoryInvocationHandler.forComponentFactory(factoryClass);
   }

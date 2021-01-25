@@ -50,6 +50,24 @@ final class ComponentBuilderInvocationHandler implements InvocationHandler {
         new ComponentBuilderInvocationHandler(componentClass, builderClass, scopeBuilder));
   }
 
+  static <B, C> B forComponentBuilder(Class<B> builderClass, Class<C> componentClass) {
+    requireAnnotation(builderClass, Component.Builder.class);
+
+    if (!Modifier.isPublic(componentClass.getModifiers())) {
+      // Instances of proxies cannot create another proxy instance where the second interface is
+      // not public. This prevents proxies of builders from creating proxies of the component.
+      throw new IllegalArgumentException(
+              "Component interface "
+                      + componentClass.getCanonicalName()
+                      + " must be public in order to be reflectively created");
+    }
+
+    ComponentScopeBuilder scopeBuilder = ComponentScopeBuilder.buildComponent(componentClass);
+    return newProxy(
+            builderClass,
+            new ComponentBuilderInvocationHandler(componentClass, builderClass, scopeBuilder));
+  }
+
   static <B> B forSubcomponentBuilder(Class<B> builderClass, Scope parent) {
     requireAnnotation(builderClass, Subcomponent.Builder.class);
 

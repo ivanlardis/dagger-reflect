@@ -15,24 +15,20 @@
  */
 package dagger.reflect.compiler;
 
-import static java.util.Collections.singleton;
-import static javax.lang.model.SourceVersion.RELEASE_8;
-import static javax.lang.model.element.Modifier.FINAL;
-import static javax.lang.model.element.Modifier.PRIVATE;
-import static javax.lang.model.element.Modifier.PUBLIC;
-import static javax.lang.model.element.Modifier.STATIC;
-import static javax.tools.Diagnostic.Kind.ERROR;
-import static net.ltgt.gradle.incap.IncrementalAnnotationProcessorType.ISOLATING;
-
 import com.google.auto.service.AutoService;
 import com.squareup.javapoet.AnnotationSpec;
 import com.squareup.javapoet.ClassName;
 import com.squareup.javapoet.JavaFile;
 import com.squareup.javapoet.MethodSpec;
 import com.squareup.javapoet.TypeSpec;
-import dagger.Component;
-import dagger.reflect.DaggerReflect;
+
+import net.ltgt.gradle.incap.IncrementalAnnotationProcessor;
+
+import org.jetbrains.annotations.Nullable;
+
+import java.util.List;
 import java.util.Set;
+
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
 import javax.annotation.processing.Messager;
@@ -40,10 +36,26 @@ import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.Processor;
 import javax.annotation.processing.RoundEnvironment;
 import javax.lang.model.SourceVersion;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.TypeElement;
-import net.ltgt.gradle.incap.IncrementalAnnotationProcessor;
-import org.jetbrains.annotations.Nullable;
+
+import dagger.Component;
+import dagger.reflect.DaggerReflect;
+
+import static dagger.reflect.compiler.DaggerReflectUtils.getAnnotationMirror;
+import static dagger.reflect.compiler.DaggerReflectUtils.getAnnotationValue;
+import static dagger.reflect.compiler.DaggerReflectUtils.toLowerCaseFirstLetter;
+import static java.util.Collections.singleton;
+import static javax.lang.model.SourceVersion.RELEASE_8;
+import static javax.lang.model.element.Modifier.ABSTRACT;
+import static javax.lang.model.element.Modifier.FINAL;
+import static javax.lang.model.element.Modifier.PRIVATE;
+import static javax.lang.model.element.Modifier.PUBLIC;
+import static javax.lang.model.element.Modifier.STATIC;
+import static javax.tools.Diagnostic.Kind.ERROR;
+import static net.ltgt.gradle.incap.IncrementalAnnotationProcessorType.ISOLATING;
 
 @IncrementalAnnotationProcessor(ISOLATING)
 @AutoService(Processor.class)
@@ -94,10 +106,12 @@ public final class DaggerReflectCompiler extends AbstractProcessor {
       TypeElement factory = findFactory(component);
       ClassName factoryName = factory != null ? ClassName.get(factory) : null;
 
+      List<AnnotationValue> dependencies = findDependencies(component);
+
       TypeSpec.Builder typeBuilder =
-          createComponent(componentName, builderName, factoryName)
-              .toBuilder()
-              .addOriginatingElement(component);
+              createComponent(componentName, builderName, factoryName, dependencies)
+                      .toBuilder()
+                      .addOriginatingElement(component);
       if (generatedAnnotation != null) {
         typeBuilder.addAnnotation(generatedAnnotation);
       }
@@ -123,6 +137,19 @@ public final class DaggerReflectCompiler extends AbstractProcessor {
     return null;
   }
 
+  private @Nullable List<AnnotationValue> findDependencies(TypeElement component) {
+    AnnotationMirror am = getAnnotationMirror(component, Component.class);
+    if (am == null) {
+      return null;
+    }
+    AnnotationValue av = getAnnotationValue(am, "dependencies");
+    if (av != null) {
+      return (List<AnnotationValue>) av.getValue();
+    }
+
+    return null;
+  }
+
   private static @Nullable TypeElement findFactory(TypeElement component) {
     for (Element enclosed : component.getEnclosedElements()) {
       if (enclosed.getAnnotation(Component.Factory.class) != null) {
@@ -133,7 +160,10 @@ public final class DaggerReflectCompiler extends AbstractProcessor {
   }
 
   private static TypeSpec createComponent(
-      ClassName component, @Nullable ClassName builder, @Nullable ClassName factory) {
+          ClassName component,
+          @Nullable ClassName builder,
+          @Nullable ClassName factory,
+          @Nullable List<AnnotationValue> dependencies) {
     String componentName = "Dagger" + String.join("_", component.simpleNames());
     TypeSpec.Builder type =
         TypeSpec.classBuilder(componentName)
@@ -164,6 +194,44 @@ public final class DaggerReflectCompiler extends AbstractProcessor {
               .returns(factory)
               .addStatement("return $T.factory($T.class)", DaggerReflect.class, factory)
               .build());
+    }
+
+    if (dependencies != null && builder == null) {
+      ClassName builderClassName = ClassName.bestGuess("Builder");
+      TypeSpec.Builder componentBuilder = TypeSpec.interfaceBuilder(builderClassName)
+              .addModifiers(PUBLIC, STATIC)
+              .addAnnotation(Component.Builder.class);
+
+      componentBuilder.addMethod(MethodSpec.methodBuilder("build")
+              .addModifiers(PUBLIC, ABSTRACT)
+              .returns(component)
+              .build());
+
+      for (AnnotationValue dependency : dependencies) {
+
+        ClassName dependencyClassName = ClassName.bestGuess(dependency.getValue().toString());
+
+        String methodBuilderName = toLowerCaseFirstLetter(dependencyClassName.simpleName());
+        componentBuilder.addMethod(MethodSpec.methodBuilder(methodBuilderName)
+                .addModifiers(PUBLIC, ABSTRACT)
+                .addParameter(dependencyClassName, methodBuilderName)
+                .returns(builderClassName)
+                .build());
+      }
+
+
+      type.addType(componentBuilder.build());
+
+
+      type.addMethod(
+              MethodSpec.methodBuilder("builder")
+                      .addModifiers(PUBLIC, STATIC)
+                      .returns(builderClassName)
+                      .addStatement("return $T.builder($T.class, $T.class)",
+                              DaggerReflect.class,
+                              builderClassName,
+                              component)
+                      .build());
     }
     return type.build();
   }
